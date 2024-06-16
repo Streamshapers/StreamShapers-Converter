@@ -87,24 +87,84 @@
 <script>
     "use strict"
     let lottieTemplate = ${jsonData};
+    let SHEET_ID = "1Ta6xX9ZVGEQXY5K3uqpCSlqXr6r6Ixqpr91-WcAR1IA"
+    let SHEET_TITLE = "Tabellenblatt1"
+    let sheetURL = 'https://docs.google.com/spreadsheets/d/' + SHEET_ID + '/gviz/tq?sheet=' + SHEET_TITLE
+
+    let sheetApiData = []
+
+
+    //Dieser Bock muss durch den Converter gefüllt werden
+    sheetApiData.push({
+        key: "_value1",
+        cell: "A1",
+        value:"default"
+    })
+
+    sheetApiData.push({
+        key: "_value2",
+        cell: "A2",
+        value:"default"
+    })
+
+    sheetApiData.push({
+        key: "_value3",
+        cell: "A3",
+        value:"default"
+    })
+
+
     let playStatus = "";
     let nextCount = 1;
     let nextTotal = 0;
     let showInfo = false;
     let currentSegment;
     let currentSegmentFrames;
-    let animReady;
+    let animReady = createDeferredPromise()
+    let animLoaded = createDeferredPromise()
+    let fetchReady;
     let animation;
     let newAnimation;
     let stopExist = false;
     let showLogs = false;
-    let imagesPathPrefix = ${imagePath};
-    let updateCounter = 1;
-    let currentFrame;
+    let updateCounter = 1
+    let fetchSheet = true;
+    let fetchInterval = 2000
+    let currentFrame
+    let lottieState = "pause"
+
+
+    //Creating golble functions
+
+
+    function createDeferredPromise() {
+        let resolver, rejecter;
+        const promise = new Promise((resolve, reject) => {
+            resolver = resolve;
+            rejecter = reject;
+        });
+        return {
+            promise,
+            resolve: resolver,
+            reject: rejecter
+        };
+    }
+
+    function getCellData(cell,data) {
+        let columnName = cell.match(/[A-Z]+/g)[0];
+        let base = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        let rowIx = (parseInt(cell.match(/[0-9]+/g)[0]))-1; //incl. index Shift (-1)
+        let colIx = 0
+        for (var i = 0; i < columnName.length; i++) {
+            colIx= colIx * 26 + base.indexOf(columnName[i]) + 1;
+        }
+        colIx = colIx -1; //fix Index Shift
+        return data[rowIx][colIx]
+    }
 
     //add font-face from data.json  //Credits to HeineFro  @https://github.com/HeineFro
     const addFont = (fam, path) => {
-        let newFont = document.createElement('style');
+        let newFont = document.createElement('style')
         newFont.appendChild(document.createTextNode(`\
             @font-face {\
                 font-family: ${fam};\
@@ -114,222 +174,267 @@
         document.head.appendChild(newFont);
     }
 
-    function loadFonts() {
+    function pause (sec) {
         return new Promise((resolve, reject) => {
-            const fonts = lottieTemplate.fonts.list;
-            let fontPromises = [];
+            setTimeout(()=>{
+                resolve("Die "+ sec +" Sekunden Pause ist vorbei")
+            },sec*1000)
+        })
+    };
 
-            for (const font of fonts) {
-                if (font.fPath !== '') {
-                    fontPromises.push(new FontFace(font.fFamily, `url(${font.fPath})`).load());
-                }
-            }
+    async function fetchDataFromGoogle(url) {
+        let response = await fetch(url)
+        let text = await response.text()
+        let parsed = await JSON.parse(text.substr(47).slice(0,-2))
+        const dataArray = []
 
-            Promise.all(fontPromises)
-                .then(() => resolve('Fonts loaded'))
-                .catch(err => reject(err));
-        });
+        parsed.table.rows.forEach(row => {
+            // console.log(row.c)
+            let colums = []
+            row.c.forEach(cell =>{
+                colums.push(cell.v)
+            })
+            dataArray.push(colums)
+        })
+        console.log(dataArray)
+        return dataArray
     }
 
-    //updates Images Assets by there Refid  //Credits to HeineFro  @https://github.com/HeineFro
-    function updateAssetsByRefid(array, searchValue, newValue) {
-        const foundObject = array.find(obj => obj['id'] === searchValue);
+    setTimeout(()=>{
+        setInterval(()=>{
+            update()
+        },2000)
+    },4000)
 
-        if (foundObject) {
-            foundObject['u'] = imagesPathPrefix
-            foundObject['p'] = newValue;
-            foundObject['e'] = 0
-            return foundObject;
-        }
 
-        return null;
-    }
+
+    //-----------------//
+
+
+
 
     //fix and check markers
     lottieTemplate.markers.forEach((marker) => {
-        let name = marker.cm;
-        marker.cm = "name:" + name.toLowerCase();
-
+        let name = marker.cm
+        marker.cm = "name:" + name.toLowerCase()
         if (name.includes("next")) {
             nextTotal++
         }
         if (name == "stop") {
-            stopExist = true;
+            stopExist = true
         }
     })
     let lottieTemplateNew = {...lottieTemplate};
 
+
+    //-------------//
+
+
+    // Update function - loads the Data und create die animation without playing
     async function update(rawData) {
-        lottieTemplateNew = {...lottieTemplate};
-        let parsed;
+        try{
+            console.log("update call")
+            lottieTemplateNew = {...lottieTemplate};
 
-        if (rawData) {
-            if (rawData.startsWith("<templateData>")) {
-                let parser = new DOMParser();
-                let xmlDoc = parser.parseFromString(rawData, "text/xml");
-
-                let json = {};
-
-                let components = xmlDoc.getElementsByTagName("componentData");
-                for (let component of components) {
-                    let id = component.getAttribute("id");
-                    let dataElement = component.getElementsByTagName("data")[0];
-                    json[id] = dataElement.getAttribute("value");
+            //handle rawData from CasparCG
+            let parsed
+            if (rawData) {
+                console.log("RawData is not empty")
+                if (rawData.startsWith("<templateData>")) {
+                    let parser = new DOMParser();
+                    let xmlDoc = parser.parseFromString(rawData, "text/xml");
+                    // JSON-Objekt initialisieren
+                    let json = {};
+                    // Durch die 'componentData' Elemente iterieren
+                    let components = xmlDoc.getElementsByTagName("componentData");
+                    for (let component of components) {
+                        let id = component.getAttribute("id"); // 'id' des componentData Elements
+                        let dataElement = component.getElementsByTagName("data")[0];
+                        let value = dataElement.getAttribute("value"); // 'value' Attribut des 'data' Elements
+                        json[id] = value;
+                    }
+                    parsed = json
+                } else {
+                    parsed = JSON.parse(rawData)
                 }
-                parsed = json;
-            } else {
-                parsed = JSON.parse(rawData);
+                for (let key of Object.keys(parsed)) {
+                    if (key === "_templateInfo") showInfo = true
+                    if (key === "_debug") showLogs = true
+                    if (key === "_stopFetch") fetchSheet = false
+                }
             }
-            for (let key of Object.keys(parsed)) {
-                if (key === "_templateInfo") showInfo = true;
-                if (key === "_debug") showLogs = true;
-                if (key === "epochID") imagesPathPrefix = "";
+            //update Data in template
+
+            if(fetchSheet) {
+                let tsvArray = await fetchDataFromGoogle(sheetURL)
+                sheetApiData.forEach((element)=>{
+                    element.value = getCellData(element.cell,tsvArray)
+                    if (!parsed) parsed = {}
+                    if (!(element.key in parsed)){
+                        parsed[element.key] = element.value
+                    }
+                })
             }
-            for (let key of Object.keys(parsed)) {
-                lottieTemplateNew.layers.forEach((layer) => {
-                    if (layer.nm === key) {
-                        if ('refId' in layer) {
-                            updateAssetsByRefid(lottieTemplateNew.assets, layer.refId, parsed[key]);
-                        } else {
-                            layer.t.d.k[0].s.t = parsed[key];
+
+            if(parsed){
+                for (let key of Object.keys(parsed)) {
+                    lottieTemplateNew.layers.forEach((layer) => {
+                        if (layer.nm === key) {
+                            layer.t.d.k[0].s.t = parsed[key]
                         }
-                    }
-                })
-            }
-        }
-
-        if (playStatus === "") {
-            animation = bodymovin.loadAnimation({
-                container: document.getElementById("animation1"),
-                renderer: "svg",
-                loop: false,
-                autoplay: false,
-                animationData: lottieTemplateNew,
-            })
-            let fonts = animation.renderer.data.fonts.list;
-            for (const font in fonts) {
-                let family = fonts[font].fFamily;
-                let fontPath = fonts[font].fPath;
-                if (fontPath !== '') {
-                    addFont(family, fontPath);
+                    })
                 }
             }
-            animReady = new Promise((resolve, reject) => {
+
+
+            if (playStatus === "") {
+                animation = bodymovin.loadAnimation({
+                    container: document.getElementById("animation1"),
+                    renderer: "svg",
+                    loop: false,
+                    autoplay: false,
+                    animationData: lottieTemplateNew,
+                })
+                /*
+                let fonts = animation.renderer.data.fonts.list;
+                for (const font in fonts) {
+                    let family = fonts[font].fFamily
+                    let fontPath = fonts[font].fPath
+                    if (fontPath !== '') {
+                        addFont(family, fontPath)
+                    }
+                }
+                */
+
                 animation.addEventListener("DOMLoaded", function () {
-                    if (showLogs) console.log("Template - Ready");
-                    resolve("ready");
+                    animReady.resolve("Template - Animation is Ready")
+                    if (showLogs) console.log("Template - Animation is Ready")
                 })
-            })
 
-            animation.addEventListener("enterFrame", () => {
-                for (let marker of lottieTemplate.markers) {
-                    if (marker.cm === "name:" + currentSegment) {
-                        currentSegmentFrames = marker.tm;
-                    }
-                }
-                currentFrame = animation.currentFrame + currentSegmentFrames;
-                if (showLogs) console.log(`Template - Current Frame: ${currentFrame}`);
-            })
+                animation.addEventListener("_play", function () {
+                    lottieState = "play"
+                    console.log("LottieState - Play")
+                })
 
-            updateTimeField("animation" + updateCounter);
+                animation.addEventListener("_pause", function () {
+                    lottieState = "stop"
+                    console.log("LottieState - pause")
+                })
 
-        }
-        if (playStatus === "play") {
-            updateCounter++;
-            let newDiv = document.createElement("div");
-            newDiv.id = "animation" + updateCounter;
-            document.body.appendChild(newDiv);
 
-            let newAnimation = bodymovin.loadAnimation({
-                container: document.getElementById("animation" + updateCounter),
-                renderer: "svg",
-                loop: false,
-                autoplay: false,
-                animationData: lottieTemplateNew,
-            })
-
-            newAnimation.addEventListener("DOMLoaded", function () {
-                if (showInfo) console.log("Template - updated Animation Ready");
-                newAnimation.goToAndStop(currentFrame, true);
-                animation.destroy();
-                document.getElementById("animation" + (updateCounter - 1)).remove();
-                animation = newAnimation;
                 animation.addEventListener("enterFrame", () => {
                     for (let marker of lottieTemplate.markers) {
                         if (marker.cm === "name:" + currentSegment) {
-                            currentSegmentFrames = marker.tm;
+                            currentSegmentFrames = marker.tm
                         }
                     }
-                    currentFrame = animation.currentFrame + currentSegmentFrames;
-                    if (showLogs) console.log(`Current Frame: ${currentFrame}`);
+                    currentFrame = animation.currentFrame + currentSegmentFrames
+                    if (showLogs) console.log(`Template - Current Frame: ${currentFrame}`);
                 })
 
-                updateTimeField("animation" + updateCounter);
 
-                newAnimation = null;
-            })
-        }
-        if (showInfo) info();
+                await animReady.promise
+                animation.goToAndStop(0, true)
+                playStatus = "loaded"
+                currentSegment = "start"
+                animLoaded.resolve("Template - Animation is Ready")
+
+            }
+            if (playStatus === "play") {
+                updateCounter++
+                let newDiv = document.createElement("div");
+                newDiv.id = "animation"+updateCounter;
+                document.body.appendChild(newDiv);
+
+                let newAnimation = bodymovin.loadAnimation({
+                    container: document.getElementById("animation"+updateCounter),
+                    renderer: "svg",
+                    loop: false,
+                    autoplay: false,
+                    animationData: lottieTemplateNew,
+                })
+
+                newAnimation.addEventListener("DOMLoaded", function () {
+                    if (showInfo) console.log("Template - updated Animation Ready")
+                    if (lottieState = "play") newAnimation.goToAndPlay(currentFrame, true)
+                    if (lottieState = "pause") newAnimation.goToAndStop(currentFrame, true)
+                    animation.destroy()
+                    document.getElementById("animation"+(updateCounter-1)).remove()
+                    animation = newAnimation
+                    animation.addEventListener("enterFrame", () => {
+                        for (let marker of lottieTemplate.markers) {
+                            if (marker.cm === "name:" + currentSegment) {
+                                currentSegmentFrames = marker.tm
+                            }
+                        }
+                        currentFrame = animation.currentFrame + currentSegmentFrames
+                        if(showLogs) console.log(`Current Frame: ${currentFrame}`);
+                    })
+                    animation.addEventListener("_play", function () {
+                        lottieState = "play"
+                        console.log("LottieState - Play")
+                    })
+                    animation.addEventListener("_pause", function () {
+                        lottieState = "stop"
+                        console.log("LottieState - pause")
+                    })
+
+                    newAnimation = null
+                })
+            }
+        }catch (err) {console.log(err)}
     }
 
-
     async function play() {
-        await animReady;
-        await loadFonts();
+        console.log("play call")
+        console.log(await animLoaded.promise)
+
         animation.goToAndPlay("start", true);
+        if (showLogs) console.log("Template - Play 'start' marker")
         playStatus = "play";
         currentSegment = "start";
-        if (showLogs) console.log("Template - Play 'start' marker");
-        updateTimeField("animation" + updateCounter);
     }
 
 
     function stop() {
         if (stopExist) {
-            animation.goToAndPlay("stop", true);
-            if (showLogs) console.log("Template - Play 'stop' Marker");
+            animation.goToAndPlay("stop", true)
+            if (showLogs) console.log("Template - Play 'stop' Marker")
         } else {
-            if (showLogs) console.log("Template - No 'stop' marker - destroy Animation");
-            animation.destroy();
+            if (showLogs) console.log("Template - No 'stop' marker - destroy Animation")
+            animation.destroy()
         }
-        playStatus = "stop";
+        playStatus = "stop"
     }
 
     function next() {
         if (nextCount > nextTotal && stopExist) {
-            animation.goToAndPlay("stop", true);
-            if (showLogs) console.log("Template - No 'next' marker left - Play 'stop' Marker");
+            animation.goToAndPlay("stop", true)
+            if (showLogs) console.log("Template - No 'next' marker left - Play 'stop' Marker")
         } else {
-            if (showLogs) console.log("Template - Play 'next" + nextCount + "' Marker");
-            animation.goToAndPlay("next" + nextCount, true);
-            currentSegment = "next" + nextCount;
-            nextCount++;
+            if (showLogs) console.log("Template - Play 'next"+nextCount+"' Marker")
+            animation.goToAndPlay("next" + nextCount, true)
+            currentSegment = "next" + nextCount
+            nextCount++
         }
     }
 
     function info() {
-        animation.destroy();
-        let title = document.createElement("h1");
-        title.appendChild(document.createTextNode("These are the names of your After-Effects layers starting with \"_\"."));
-        document.body.appendChild(title);
-
+        animation.destroy()
+        let title = document.createElement("h1")
+        title.appendChild(document.createTextNode("These are the names of your After-Effects layers starting with \"_\"."))
+        document.body.appendChild(title)
         lottieTemplate.layers.forEach((layer) => {
             if (layer.nm.startsWith("_")) {
-                let nameElement = document.createElement("p");
-                let text = document.createTextNode(layer.nm);
-                let br = document.createElement("br");
-                nameElement.appendChild(text);
+
+                let nameElement = document.createElement("p")
+                let text = document.createTextNode(layer.nm)
+                let br = document.createElement("br")
+                nameElement.appendChild(text)
                 document.body.appendChild(nameElement);
                 document.body.appendChild(br);
             }
         })
-
-        let nameElement = document.createElement("p");
-        let text = document.createTextNode("Your image path is: '" + imagesPathPrefix + "'");
-        let br = document.createElement("br");
-        nameElement.appendChild(text);
-        document.body.appendChild(nameElement);
-        document.body.appendChild(br);
     }
 </script>
 <!-- Lottie.js-->
